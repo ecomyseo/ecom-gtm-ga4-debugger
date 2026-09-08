@@ -93,7 +93,10 @@ function consentText(v) {
 }
 
 /* ============================================================ Estado */
-const MAX_ROWS = 1500;
+const MAX_ROWS = 50000;   // con "Conservar" guardamos toda la sesión (para exportarla entera)
+const RENDER_CAP = 2000;  // en pantalla solo se pintan los últimos N (rendimiento); el export lleva TODOS
+let _lastTs = null;
+const _seenTx = {};
 let rows = [];
 let selected = null;
 let lastEnv = null;
@@ -104,9 +107,9 @@ function el(t, c, tx) { const e = document.createElement(t); if (c) e.className 
 
 let port = null;
 function onPortMsg(m) {
-  if (m.kind === 'snapshot') { rows = []; (m.state.events || []).forEach(ingest); lastEnv = m.state.env || lastEnv; render(); }
+  if (m.kind === 'snapshot') { rows = []; _lastTs = null; for (const k in _seenTx) delete _seenTx[k]; (m.state.events || []).forEach(ingest); lastEnv = m.state.env || lastEnv; render(); }
   else if (m.kind === 'push') { ingest(m.msg); scheduleRender(); }
-  else if (m.kind === 'reset') { rows = []; selected = null; lastEnv = null; detail.innerHTML = EMPTY_HTML; render(); }
+  else if (m.kind === 'reset') { rows = []; selected = null; lastEnv = null; _lastTs = null; for (const k in _seenTx) delete _seenTx[k]; detail.innerHTML = EMPTY_HTML; render(); }
 }
 function connect() {
   try {
@@ -126,13 +129,20 @@ function isEcom(r) { return ECOM.has(evName(r)); }
 function isGtmInternal(r) { return r.type === 'dl' && /^gtm\./.test(r.dlEvent || ''); }
 function displayName(r) { if (r.type === 'hit') return humanLabel(r.payload.en); return r.dlEvent ? humanLabel(r.dlEvent) : r.name; }
 
+function annotate(r, ts) {
+  r._delta = _lastTs == null ? 0 : (ts - _lastTs); _lastTs = ts;
+  if (r.type === 'hit') {
+    r._issues = issuesFor(r.payload);
+    if (r.payload.en === 'purchase') { const tx = txId(r.payload); if (tx) { if (_seenTx[tx]) r._issues = r._issues.concat('Compra DUPLICADA (mismo nº de pedido)'); _seenTx[tx] = true; } }
+  } else r._issues = [];
+}
 function ingest(msg) {
   if (msg.type === 'env') { lastEnv = msg.data; return; }
   if (msg.type === 'hit') {
-    msg.data.events.forEach((ev) => rows.push({
-      type: 'hit', name: ev.en || '(sin evento)', transport: msg.data.transport, host: msg.data.host,
-      page: msg.frame || '', ts: msg.ts, payload: ev, rawText: msg.data.raw || '', raw: msg.data
-    }));
+    msg.data.events.forEach((ev) => {
+      const r = { type: 'hit', name: ev.en || '(sin evento)', transport: msg.data.transport, host: msg.data.host, page: msg.frame || '', ts: msg.ts, payload: ev, rawText: msg.data.raw || '', raw: msg.data };
+      annotate(r, msg.ts); rows.push(r);
+    });
   } else if (msg.type === 'dl') {
     const it = msg.data.item; let name = '(push)', dlEvent = '';
     if (it && typeof it === 'object') {
@@ -140,7 +150,8 @@ function ingest(msg) {
       else if (it.event) { dlEvent = it.event; name = it.event; }
       else { name = '{' + Object.keys(it).slice(0, 3).join(', ') + '}'; }
     }
-    rows.push({ type: 'dl', name: name, dlEvent: dlEvent, page: msg.frame || '', dlName: (msg.data.name || 'dataLayer'), replay: !!msg.data.replay, ts: msg.ts, payload: it });
+    const r = { type: 'dl', name: name, dlEvent: dlEvent, page: msg.frame || '', dlName: (msg.data.name || 'dataLayer'), replay: !!msg.data.replay, ts: msg.ts, payload: it };
+    annotate(r, msg.ts); rows.push(r);
   }
   if (rows.length > MAX_ROWS) rows.splice(0, rows.length - MAX_ROWS);
 }
@@ -148,14 +159,6 @@ function ingest(msg) {
 /* ============================================================ Render */
 let renderPending = false;
 function scheduleRender() { if (renderPending) return; renderPending = true; requestAnimationFrame(() => { renderPending = false; render(); }); }
-function preprocess(vis) {
-  const seenTx = {}; let prev = null;
-  vis.forEach((r) => {
-    r._delta = prev == null ? 0 : (r.ts - prev); prev = r.ts;
-    if (r.type === 'hit') { r._issues = issuesFor(r.payload); if (r.payload.en === 'purchase') { const tx = txId(r.payload); if (tx) { if (seenTx[tx]) r._issues = r._issues.concat('Compra DUPLICADA (mismo nº de pedido)'); seenTx[tx] = true; } } }
-    else r._issues = [];
-  });
-}
 function filters() { return { q: $('#filter').value.trim().toLowerCase(), vista: $('#view').value, showGtm: $('#showGtm').checked, evt: $('#evType').value }; }
 function anyFilter() { const f = filters(); return !!(f.q || f.vista || f.evt || f.showGtm); }
 function visible() {
@@ -175,17 +178,22 @@ function visible() {
 function render() {
   renderEnv(); syncEvTypes(); renderSummary();
   $('#reset').hidden = !anyFilter();
-  const items = visible(); preprocess(items);
+  const all = visible();
+  const items = all.length > RENDER_CAP ? all.slice(all.length - RENDER_CAP) : all;
   const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
   list.innerHTML = '';
-  if (!items.length) {
+  if (!all.length) {
     const li = el('li'); li.style.cursor = 'default'; li.style.borderLeftColor = 'transparent';
     li.appendChild(el('span', 'empty', rows.length ? 'No hay eventos con este filtro.' : 'Esperando eventos… recarga la página (F5).'));
+    list.appendChild(li);
+  } else if (all.length > items.length) {
+    const li = el('li'); li.style.cursor = 'default'; li.style.borderLeftColor = 'transparent';
+    li.appendChild(el('span', 'empty', 'Mostrando los últimos ' + RENDER_CAP + ' de ' + all.length + ' eventos · «Exportar JSON» los guarda TODOS.'));
     list.appendChild(li);
   }
   const frag = document.createDocumentFragment();
   items.forEach((r) => {
-    const li = el('li'); const cls = [];
+    const li = el('li'); li.__row = r; const cls = [];
     if (r === selected) cls.push('sel'); if (r._issues && r._issues.length) cls.push('warn'); if (isEcom(r)) cls.push('ecom');
     if (cls.length) li.className = cls.join(' ');
     li.appendChild(el('span', 'tag ' + (r.type === 'hit' ? 'hit' : 'dl'), r.type === 'hit' ? 'GA4' : 'DL'));
@@ -202,7 +210,7 @@ function render() {
   list.appendChild(frag); markSelected();
   if (atBottom) list.scrollTop = list.scrollHeight;
 }
-function markSelected() { const els = list.querySelectorAll('li'); const items = visible(); els.forEach((li, i) => li.classList && li.classList.toggle('sel', items[i] === selected)); }
+function markSelected() { list.querySelectorAll('li').forEach((li) => { if (li.__row) li.classList.toggle('sel', li.__row === selected); }); }
 
 function syncEvTypes() {
   const sel = $('#evType'); const cur = sel.value; const s = new Set();
@@ -478,5 +486,5 @@ $('#showGtm').onchange = render;
 $('#reset').onclick = () => { $('#filter').value = ''; $('#view').value = ''; $('#evType').value = ''; $('#showGtm').checked = false; render(); };
 $('#preserve').onchange = (e) => sendPort({ kind: 'preserve', value: e.target.checked });
 $('#clear').onclick = () => { rows = []; selected = null; detail.innerHTML = EMPTY_HTML; render(); sendPort({ kind: 'clear' }); };
-$('#export').onclick = () => download('ga4-gtm-' + Date.now() + '.json', JSON.stringify(rows, null, 2), 'application/json');
+$('#export').onclick = () => download('ga4-gtm-sesion-' + Date.now() + '.json', JSON.stringify({ exportadoEl: new Date().toISOString(), entorno: lastEnv, total: rows.length, eventos: rows }, null, 2), 'application/json');
 $('#exportCsv').onclick = () => download('ga4-gtm-' + Date.now() + '.csv', toCsv(), 'text/csv;charset=utf-8');

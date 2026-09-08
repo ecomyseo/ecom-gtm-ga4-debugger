@@ -20,7 +20,7 @@ function persist(tabId) {
   saveT.set(tabId, setTimeout(() => {
     saveT.delete(tabId);
     try { chrome.storage.session.set({ ['hist_' + tabId]: store.get(tabId) || { events: [], env: null, preserve: false } }); } catch (e) {}
-  }, 800));
+  }, 1500));
 }
 function dropHist(tabId) { try { chrome.storage.session.remove('hist_' + tabId); } catch (e) {} }
 
@@ -35,7 +35,10 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     if (msg.top || !s.env) s.env = msg.data;
   } else {
     s.events.push(msg);
-    if (s.events.length > MAX) s.events.shift();
+    // Con "Conservar" activo guardamos TODA la sesión (flujo de compra completo);
+    // sin él, el tope normal de depuración.
+    const cap = s.preserve ? 50000 : MAX;
+    if (s.events.length > cap) s.events.splice(0, s.events.length - cap);
   }
   broadcast(tabId, { kind: 'push', msg });
   persist(tabId);
