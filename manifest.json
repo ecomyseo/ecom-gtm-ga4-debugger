@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ecom GTM & GA4 Debugger",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Inspector de dataLayer (GTM) y hits GA4, incluidos endpoints regionales y server-side. Por gmartos.es",
   "author": "gmartos.es",
   "homepage_url": "https://gmartos.es",

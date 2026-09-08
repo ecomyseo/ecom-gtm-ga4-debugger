@@ -107,19 +107,31 @@ function el(t, c, tx) { const e = document.createElement(t); if (c) e.className 
 
 let port = null;
 function onPortMsg(m) {
-  if (m.kind === 'snapshot') { rows = []; _lastTs = null; for (const k in _seenTx) delete _seenTx[k]; (m.state.events || []).forEach(ingest); lastEnv = m.state.env || lastEnv; render(); }
+  if (m.kind === 'snapshot') {
+    const evs = m.state.events || [];
+    // Solo reemplazamos si el snapshot trae datos o si estamos vacíos: así una reconexión
+    // con snapshot vacío (SW recién despertado) NO borra lo que ya teníamos.
+    if (evs.length || !rows.length) { rows = []; _lastTs = null; for (const k in _seenTx) delete _seenTx[k]; evs.forEach(ingest); }
+    lastEnv = m.state.env || lastEnv;
+    render();
+  }
   else if (m.kind === 'push') { ingest(m.msg); scheduleRender(); }
   else if (m.kind === 'reset') { rows = []; selected = null; lastEnv = null; _lastTs = null; for (const k in _seenTx) delete _seenTx[k]; detail.innerHTML = EMPTY_HTML; render(); }
 }
+function extAlive() { try { return !!(chrome.runtime && chrome.runtime.id); } catch (e) { return false; } }
+function showReconnectNotice() {
+  try { envBox.innerHTML = '⚠ La extensión se recargó. <b>Cierra y vuelve a abrir las DevTools (F12)</b> para reconectar el panel.'; } catch (e) { /* noop */ }
+}
 function connect() {
+  if (!extAlive()) { showReconnectNotice(); return; } // extensión recargada: el panel viejo no puede reconectar
   try {
     port = chrome.runtime.connect({ name: 'ga4dbg-panel' });
     port.postMessage({ kind: 'init', tabId: chrome.devtools.inspectedWindow.tabId });
     port.postMessage({ kind: 'preserve', value: $('#preserve').checked });
     port.onMessage.addListener(onPortMsg);
-    // El service worker de MV3 se duerme y mata el puerto: reconectar solo.
-    port.onDisconnect.addListener(() => { port = null; setTimeout(connect, 700); });
-  } catch (e) { port = null; setTimeout(connect, 1500); }
+    // El service worker de MV3 se duerme y mata el puerto: reconectar solo (si la extensión sigue viva).
+    port.onDisconnect.addListener(() => { port = null; if (extAlive()) setTimeout(connect, 700); else showReconnectNotice(); });
+  } catch (e) { port = null; if (extAlive()) setTimeout(connect, 1500); else showReconnectNotice(); }
 }
 function sendPort(msg) { try { if (!port) return false; port.postMessage(msg); return true; } catch (e) { port = null; setTimeout(connect, 300); return false; } }
 connect();
