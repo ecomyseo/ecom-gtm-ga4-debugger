@@ -1,3 +1,17 @@
+# GTM & GA4 Debugger
+
+**A DevTools panel that catches every GA4 hit (regional, first-party, server-side GTM, sendBeacon) and the full dataLayer flow that commercial extensions miss.**
+
+- All GA4 hits regardless of hostname or transport
+- Full dataLayer timeline
+- Own DevTools tab, no data leaves the browser
+
+> 🇪🇸 Documentación completa en castellano más abajo · Full docs below (Spanish).
+
+⭐ If this saves you time, a star helps other people find it.
+
+---
+
 <p align="center">
   <img src="icons/gmartos.png" alt="gmartos.es" height="52">
 </p>
